@@ -546,6 +546,49 @@ class AsyncClient:
             return ls_schemas.TracerSession(**data[0])
         return ls_schemas.TracerSession(**data)
 
+    async def get_project_filters(
+        self,
+        *,
+        project_id: Optional[ls_client.ID_TYPE] = None,
+        project_name: Optional[str] = None,
+    ) -> list[dict[str, Any]]:
+        """Retrieve saved filters for a tracing project."""
+        if project_id is None and project_name is None:
+            raise ValueError("Must provide either project_id or project_name")
+
+        session_identifier: Optional[str] = None
+        fallback_to_name = False
+        if project_id is not None:
+            try:
+                session_identifier = str(ls_client._as_uuid(project_id))
+            except ls_utils.LangSmithUserError:
+                session_identifier = cast(str, project_id)
+                fallback_to_name = True
+        else:
+            project = await self.read_project(project_name=project_name)
+            session_identifier = str(project.id)
+
+        async def _fetch_filters(identifier: str) -> list[dict[str, Any]]:
+            response = await self._arequest_with_retries(
+                "GET",
+                f"/sessions/{identifier}/filters",
+            )
+            data = response.json()
+            if not isinstance(data, list):
+                raise ls_utils.LangSmithError(
+                    "Unexpected response while fetching project filters"
+                )
+            return cast(list[dict[str, Any]], data)
+
+        try:
+            return await _fetch_filters(cast(str, session_identifier))
+        except ls_utils.LangSmithError:
+            if fallback_to_name:
+                project = await self.read_project(project_name=cast(str, project_id))
+                session_identifier = str(project.id)
+                return await _fetch_filters(session_identifier)
+            raise
+
     async def delete_project(
         self, *, project_name: Optional[str] = None, project_id: Optional[str] = None
     ) -> None:

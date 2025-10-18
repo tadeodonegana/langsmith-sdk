@@ -19,9 +19,10 @@ import weakref
 from datetime import datetime, timezone
 from enum import Enum
 from io import BytesIO
+from types import SimpleNamespace
 from typing import Callable, Dict, List, Literal, NamedTuple, Optional, Type, Union
 from unittest import mock
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import dataclasses_json
 import pytest
@@ -189,6 +190,245 @@ def test_validate_multiple_urls() -> None:
         assert client._write_api_urls == data
         assert client.api_url == "https://api.smith.langsmith-endpoint_1.com"
         assert client.api_key == "123"
+
+
+def test_get_project_filters_by_name(monkeypatch: pytest.MonkeyPatch) -> None:
+    client = Client(
+        api_url="http://localhost:1984",
+        api_key="test",
+        auto_batch_tracing=False,
+    )
+    session_id = uuid.uuid4()
+    expected_filters = [
+        {"id": str(uuid.uuid4()), "name": "High latency", "filter": "gt(latency, 5)"}
+    ]
+
+    read_project_mock = MagicMock(return_value=SimpleNamespace(id=session_id))
+    monkeypatch.setattr(Client, "read_project", read_project_mock)
+
+    class DummyResponse:
+        def json(self) -> list[dict[str, str]]:
+            return expected_filters
+
+    request_mock = MagicMock(return_value=DummyResponse())
+    monkeypatch.setattr(Client, "request_with_retries", request_mock)
+
+    result = client.get_project_filters(project_name="demo-project")
+
+    assert result == expected_filters
+    read_project_mock.assert_called_once()
+    assert read_project_mock.call_args.kwargs == {"project_name": "demo-project"}
+    request_mock.assert_called_once()
+    assert request_mock.call_args.args == (
+        "GET",
+        f"/sessions/{session_id}/filters",
+    )
+
+
+def test_get_project_filters_by_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    client = Client(
+        api_url="http://localhost:1984",
+        api_key="test",
+        auto_batch_tracing=False,
+    )
+    session_id = uuid.uuid4()
+    expected_filters = [
+        {"id": str(uuid.uuid4()), "name": "Errors", "filter": "eq(error, true)"}
+    ]
+
+    class DummyResponse:
+        def json(self) -> list[dict[str, str]]:
+            return expected_filters
+
+    request_mock = MagicMock(return_value=DummyResponse())
+    monkeypatch.setattr(Client, "request_with_retries", request_mock)
+    read_project_mock = MagicMock(side_effect=AssertionError("should not read project"))
+    monkeypatch.setattr(Client, "read_project", read_project_mock)
+
+    result = client.get_project_filters(project_id=str(session_id))
+
+    assert result == expected_filters
+    request_mock.assert_called_once()
+    assert request_mock.call_args.args == (
+        "GET",
+        f"/sessions/{session_id}/filters",
+    )
+
+
+def test_get_project_filters_with_slug_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = Client(
+        api_url="http://localhost:1984",
+        api_key="test",
+        auto_batch_tracing=False,
+    )
+    expected_filters = [
+        {"id": str(uuid.uuid4()), "name": "Errors", "filter": "eq(error, true)"}
+    ]
+
+    class DummyResponse:
+        def json(self) -> list[dict[str, str]]:
+            return expected_filters
+
+    request_mock = MagicMock(return_value=DummyResponse())
+    monkeypatch.setattr(Client, "request_with_retries", request_mock)
+    read_project_mock = MagicMock()
+    monkeypatch.setattr(Client, "read_project", read_project_mock)
+
+    result = client.get_project_filters(project_id="demo-project")
+
+    assert result == expected_filters
+    read_project_mock.assert_not_called()
+    request_mock.assert_called_once_with(
+        "GET",
+        "/sessions/demo-project/filters",
+    )
+
+
+def test_get_project_filters_with_slug_id_falls_back_to_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = Client(
+        api_url="http://localhost:1984",
+        api_key="test",
+        auto_batch_tracing=False,
+    )
+    session_id = uuid.uuid4()
+    expected_filters = [
+        {"id": str(uuid.uuid4()), "name": "Errors", "filter": "eq(error, true)"}
+    ]
+
+    class DummyResponse:
+        def json(self) -> list[dict[str, str]]:
+            return expected_filters
+
+    request_mock = MagicMock(
+        side_effect=[
+            ls_utils.LangSmithError("boom"),
+            DummyResponse(),
+        ]
+    )
+    monkeypatch.setattr(Client, "request_with_retries", request_mock)
+    read_project_mock = MagicMock(return_value=SimpleNamespace(id=session_id))
+    monkeypatch.setattr(Client, "read_project", read_project_mock)
+
+    result = client.get_project_filters(project_id="demo-project")
+
+    assert result == expected_filters
+    read_project_mock.assert_called_once_with(project_name="demo-project")
+    assert request_mock.call_args_list == [
+        mock.call("GET", "/sessions/demo-project/filters"),
+        mock.call("GET", f"/sessions/{session_id}/filters"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_async_get_project_filters(monkeypatch: pytest.MonkeyPatch) -> None:
+    client = AsyncClient(api_url="http://localhost:1984", api_key="test")
+    session_id = uuid.uuid4()
+    expected_filters = [
+        {
+            "id": str(uuid.uuid4()),
+            "name": "Tagged",
+            "filter": 'has(tags, "prod")',
+        }
+    ]
+
+    class DummyResponse:
+        def json(self) -> list[dict[str, str]]:
+            return expected_filters
+
+    read_project_mock = AsyncMock(return_value=SimpleNamespace(id=session_id))
+    monkeypatch.setattr(AsyncClient, "read_project", read_project_mock)
+    arequest_mock = AsyncMock(return_value=DummyResponse())
+    monkeypatch.setattr(AsyncClient, "_arequest_with_retries", arequest_mock)
+
+    result = await client.get_project_filters(project_name="demo-project")
+
+    assert result == expected_filters
+    read_project_mock.assert_awaited_once()
+    assert read_project_mock.await_args.kwargs == {"project_name": "demo-project"}
+    arequest_mock.assert_awaited_once()
+    assert arequest_mock.await_args.args == (
+        "GET",
+        f"/sessions/{session_id}/filters",
+    )
+
+
+@pytest.mark.asyncio
+async def test_async_get_project_filters_with_slug_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = AsyncClient(api_url="http://localhost:1984", api_key="test")
+    expected_filters = [
+        {
+            "id": str(uuid.uuid4()),
+            "name": "Tagged",
+            "filter": 'has(tags, "prod")',
+        }
+    ]
+
+    class DummyResponse:
+        def json(self) -> list[dict[str, str]]:
+            return expected_filters
+
+    arequest_mock = AsyncMock(return_value=DummyResponse())
+    monkeypatch.setattr(AsyncClient, "_arequest_with_retries", arequest_mock)
+    read_project_mock = AsyncMock()
+    monkeypatch.setattr(AsyncClient, "read_project", read_project_mock)
+
+    result = await client.get_project_filters(project_id="demo-project")
+
+    assert result == expected_filters
+    read_project_mock.assert_not_awaited()
+    assert arequest_mock.await_args.args == (
+        "GET",
+        "/sessions/demo-project/filters",
+    )
+
+
+@pytest.mark.asyncio
+async def test_async_get_project_filters_with_slug_id_falls_back_to_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = AsyncClient(api_url="http://localhost:1984", api_key="test")
+    session_id = uuid.uuid4()
+    expected_filters = [
+        {
+            "id": str(uuid.uuid4()),
+            "name": "Tagged",
+            "filter": 'has(tags, "prod")',
+        }
+    ]
+
+    class DummyResponse:
+        def json(self) -> list[dict[str, str]]:
+            return expected_filters
+
+    arequest_mock = AsyncMock(
+        side_effect=[
+            ls_utils.LangSmithError("boom"),
+            DummyResponse(),
+        ]
+    )
+    monkeypatch.setattr(AsyncClient, "_arequest_with_retries", arequest_mock)
+    read_project_mock = AsyncMock(return_value=SimpleNamespace(id=session_id))
+    monkeypatch.setattr(AsyncClient, "read_project", read_project_mock)
+
+    result = await client.get_project_filters(project_id="demo-project")
+
+    assert result == expected_filters
+    read_project_mock.assert_awaited_once_with(project_name="demo-project")
+    assert arequest_mock.await_args_list[0].args == (
+        "GET",
+        "/sessions/demo-project/filters",
+    )
+    assert arequest_mock.await_args_list[1].args == (
+        "GET",
+        f"/sessions/{session_id}/filters",
+    )
+    await client.aclose()
 
 
 @mock.patch("langsmith.client.requests.Session")

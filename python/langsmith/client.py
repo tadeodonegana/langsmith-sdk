@@ -8578,6 +8578,61 @@ class Client:
             examples_with_runs=_get_examples_with_runs_iterator(),
         )
 
+    @ls_utils.xor_args(("project_id", "project_name"))
+    def get_project_filters(
+        self,
+        *,
+        project_id: Optional[ID_TYPE] = None,
+        project_name: Optional[str] = None,
+    ) -> list[dict[str, Any]]:
+        """Retrieve saved filters for a tracing project.
+
+        Args:
+            project_id: The ID of the project to fetch filters for.
+            project_name: The name of the project to fetch filters for.
+
+        Returns:
+            A list of filter definitions stored for the project.
+
+        Raises:
+            ValueError: If neither ``project_id`` nor ``project_name`` are provided.
+        """
+        if project_id is None and project_name is None:
+            raise ValueError("Must provide either project_id or project_name")
+
+        session_identifier: Optional[str] = None
+        fallback_to_name = False
+        if project_id is not None:
+            try:
+                session_identifier = str(_as_uuid(project_id, "project_id"))
+            except ls_utils.LangSmithUserError:
+                session_identifier = cast(str, project_id)
+                fallback_to_name = True
+        else:
+            project = self.read_project(project_name=project_name)
+            session_identifier = str(project.id)
+
+        def _fetch_filters(identifier: str) -> list[dict[str, Any]]:
+            response = self.request_with_retries(
+                "GET",
+                f"/sessions/{identifier}/filters",
+            )
+            data = response.json()
+            if not isinstance(data, list):
+                raise ls_utils.LangSmithError(
+                    "Unexpected response while fetching project filters"
+                )
+            return cast(list[dict[str, Any]], data)
+
+        try:
+            return _fetch_filters(cast(str, session_identifier))
+        except ls_utils.LangSmithError:
+            if fallback_to_name:
+                project = self.read_project(project_name=cast(str, project_id))
+                session_identifier = str(project.id)
+                return _fetch_filters(session_identifier)
+            raise
+
 
 def convert_prompt_to_openai_format(
     messages: Any,
