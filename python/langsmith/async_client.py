@@ -546,6 +546,29 @@ class AsyncClient:
             return ls_schemas.TracerSession(**data[0])
         return ls_schemas.TracerSession(**data)
 
+    async def get_project_filters(
+        self,
+        *,
+        project_id: Optional[ls_client.ID_TYPE] = None,
+        project_name: Optional[str] = None,
+    ) -> list[dict[str, Any]]:
+        """Retrieve saved filters for a tracing project."""
+        if project_id is None:
+            project = await self.read_project(project_name=project_name)
+            project_id = project.id
+        session_id = ls_client._as_uuid(project_id)
+
+        response = await self._arequest_with_retries(
+            "GET",
+            f"/sessions/{session_id}/filters",
+        )
+        data = response.json()
+        if not isinstance(data, list):
+            raise ls_utils.LangSmithError(
+                "Unexpected response while fetching project filters"
+            )
+        return cast(list[dict[str, Any]], data)
+
     async def delete_project(
         self, *, project_name: Optional[str] = None, project_id: Optional[str] = None
     ) -> None:

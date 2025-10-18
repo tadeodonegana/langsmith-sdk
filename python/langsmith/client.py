@@ -8578,6 +8578,41 @@ class Client:
             examples_with_runs=_get_examples_with_runs_iterator(),
         )
 
+    @ls_utils.xor_args(("project_id", "project_name"))
+    def get_project_filters(
+        self,
+        *,
+        project_id: Optional[ID_TYPE] = None,
+        project_name: Optional[str] = None,
+    ) -> list[dict[str, Any]]:
+        """Retrieve saved filters for a tracing project.
+
+        Args:
+            project_id: The ID of the project to fetch filters for.
+            project_name: The name of the project to fetch filters for.
+
+        Returns:
+            A list of filter definitions stored for the project.
+
+        Raises:
+            ValueError: If neither ``project_id`` nor ``project_name`` are provided.
+        """
+        if project_id is None:
+            project = self.read_project(project_name=project_name)
+            project_id = project.id
+        session_id = _as_uuid(project_id, "project_id")
+
+        response = self.request_with_retries(
+            "GET",
+            f"/sessions/{session_id}/filters",
+        )
+        data = response.json()
+        if not isinstance(data, list):
+            raise ls_utils.LangSmithError(
+                "Unexpected response while fetching project filters"
+            )
+        return cast(list[dict[str, Any]], data)
+
 
 def convert_prompt_to_openai_format(
     messages: Any,
